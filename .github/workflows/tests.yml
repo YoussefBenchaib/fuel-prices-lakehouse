@@ -22,3 +22,8 @@ jobs:
         run: pip install -r requirements.txt
       - name: Tests
         run: pytest -v
+      - name: Run the pipeline on the sample day
+        run: python -m fuel_lakehouse process --raw-dir sample/raw --lake-dir data/lake
+      - name: dbt build (models and data tests)
+        working-directory: dbt
+        run: dbt build --profiles-dir .

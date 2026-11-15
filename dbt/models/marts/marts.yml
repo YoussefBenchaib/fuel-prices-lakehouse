@@ -1,0 +1,47 @@
+version: 2
+
+models:
+  - name: dim_stations
+    description: One row per station that reported at least one valid price, with its details as of the last day it appeared.
+    columns:
+      - name: station_id
+        tests: [unique, not_null]
+      - name: province
+        tests: [not_null]
+
+  - name: fct_province_daily_prices
+    description: Daily average, minimum and maximum price per province, fuel and self/served mode, without stale prices.
+    tests:
+      - unique_combination:
+          columns: [price_date, province, fuel, is_self]
+    columns:
+      - name: stations
+        tests:
+          - between: {min: 1}
+      - name: avg_price
+        tests: [not_null]
+
+  - name: fct_station_price_position
+    description: Each station's price against its province on the same day (gap to the average, rank from cheapest).
+    tests:
+      - unique_combination:
+          columns: [price_date, station_id, fuel, is_self]
+    columns:
+      - name: station_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_stations')
+              field: station_id
+      - name: rank_from_cheapest
+        tests:
+          - between: {min: 1}
+
+  - name: fct_brand_daily_gap
+    description: Average gap between a brand's stations and their province average, per day, fuel and self/served mode.
+    tests:
+      - unique_combination:
+          columns: [price_date, brand, fuel, is_self]
+    columns:
+      - name: brand
+        tests: [not_null]

@@ -1,0 +1,49 @@
+name: daily load
+
+# The ministry overwrites its files every morning, so each day has to be saved the day it is online.
+# Raw files are kept as assets of the "raw-data" release: one small archive per extraction date.
+
+on:
+  schedule:
+    - cron: '30 9 * * *'   # 10:30 or 11:30 in Italy, after the 8:00 export
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Download today's files
+        run: python -m fuel_lakehouse download --raw-dir data/raw
+      - name: Archive the raw day
+        run: |
+          day=$(ls data/raw)
+          tar -czf "$day.tar.gz" -C data/raw "$day"
+          gh release view raw-data >/dev/null 2>&1 || gh release create raw-data \
+            --title "Raw data" --notes "Daily MIMIT exports, one archive per extraction date."
+          gh release upload raw-data "$day.tar.gz" --clobber
+      - name: Process the day (quality checks and reconciliation)
+        run: python -m fuel_lakehouse process --raw-dir data/raw --lake-dir data/lake
+      - name: dbt build (models and data tests)
+        working-directory: dbt
+        run: dbt build --profiles-dir .
+      - name: Add the run report to the job summary
+        run: |
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat data/lake/_reports/*.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

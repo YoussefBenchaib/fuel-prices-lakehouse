@@ -2,7 +2,8 @@
 
 A batch pipeline in PySpark that turns Italy's daily fuel price open data into clean, partitioned
 Parquet tables, with data quality checks, a quarantine for rejected rows, and reconciliation of every
-row from input to output.
+row from input to output. On top of those tables, a dbt project builds the analytics models in SQL
+and tests them.
 
 It uses the same government data as my [fuel price monitor](https://github.com/YoussefBenchaib/fuel-price-monitor),
 but instead of a few stations every 15 minutes it loads the full national export: about 92,700 prices
@@ -32,8 +33,15 @@ download ─► data/raw/2026-10-20/*.csv
                │   clean prices joined with stations
                ▼
           gold/province_prices                         average / min / max per province, fuel
-                                                       and self/served, without stale prices
+               │                                       and self/served, without stale prices
+               │
           _reports/2026-10-20.json                     row counts and rejection reasons
+               │
+               ▼   dbt (DuckDB reads the Parquet files)
+          stg_prices ─► dim_stations
+                     ─► fct_province_daily_prices      checked against Spark's gold table
+                     ─► fct_station_price_position     gap to the province average, rank
+                     ─► fct_brand_daily_gap            how each brand prices against its market
 ```
 
 Result of the run on the 2026-10-20 extraction:
@@ -59,6 +67,42 @@ Result of the run on the 2026-10-20 extraction:
   gold averages: an old price is real data, but it shouldn't move today's average.
 - **Other checks:** malformed rows, non-numeric ids, invalid `isSelf`, unparseable timestamps,
   timestamps after the extraction day, duplicate keys.
+
+## dbt models
+
+The Spark pipeline answers "is this row valid?". The dbt project in `dbt/` answers business questions
+on the valid rows, in SQL. It runs on DuckDB, which reads the lake's Parquet files directly, so it
+needs no server or account.
+
+| Model | One row per | What it's for |
+|---|---|---|
+| `stg_prices` | day, station, fuel, self/served | clean prices with the names used downstream |
+| `dim_stations` | station | brand, municipality, province, coordinates |
+| `fct_province_daily_prices` | day, province, fuel, self/served | average, minimum and maximum price |
+| `fct_station_price_position` | day, station, fuel, self/served | gap to the province average and rank from cheapest |
+| `fct_brand_daily_gap` | day, brand, fuel, self/served | how each brand prices against its local market |
+
+Self-service petrol on 2026-11-14, brands with at least 300 stations (`fct_brand_daily_gap`):
+
+```
+brand            stations   avg_price   avg_gap_to_province
+Agip Eni             3841       1.946                -0.015
+Q8                   2652       1.950                -0.011
+Tamoil               1449       1.962                +0.002
+Api-Ip               3446       1.964                +0.003
+Esso                 1932       1.966                +0.004
+Pompe Bianche        2522       1.982                +0.017
+```
+
+`dbt build` runs 22 data tests: keys are unique, required columns are not null, prices stay in range,
+every station in a fact table exists in `dim_stations`, and gaps to the average cancel out within each
+province.
+
+One test compares `fct_province_daily_prices` with the gold table computed in Spark, row by row. The
+first time it ran, it failed on one row out of 6,862: four prices adding up to 8.030, so an average of
+exactly 2.0075. Spark averages decimals and rounds to 2.008; DuckDB's `avg()` returns a floating-point
+number just below 2.0075 and rounds to 2.007. The dbt models now compute averages in whole
+milli-euros (`macros/exact_avg.sql`), and the two engines agree on every row.
 
 ## Design decisions
 
@@ -89,9 +133,32 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m fuel_lakehouse download            # saves today's files in data/raw/<date>/
 .venv/bin/python -m fuel_lakehouse process             # loads every day in data/raw into data/lake
 .venv/bin/python -m fuel_lakehouse process --date 2026-10-20
+
+cd dbt && ../.venv/bin/dbt build --profiles-dir .      # models and data tests, in dbt/target/fuel_prices.duckdb
 ```
 
-To build a history, schedule `download` once a day (cron or Airflow) after 8:00.
+`sample/raw/` contains a small extract of a real day (77 stations, with operators and addresses
+replaced by placeholders), enough to try everything without downloading:
+
+```sh
+.venv/bin/python -m fuel_lakehouse process --raw-dir sample/raw
+```
+
+## Daily load
+
+Since the ministry keeps only the latest day online, a scheduled GitHub Actions workflow
+(`.github/workflows/daily.yml`) downloads the files every morning, saves them as an archive in the
+[`raw-data` release](https://github.com/YoussefBenchaib/fuel-prices-lakehouse/releases/tag/raw-data)
+(about 2 MB per day), then processes the day and runs the dbt tests. If the ministry changes the
+format or the checks fail, the run fails and I get an email.
+
+To rebuild the whole history locally:
+
+```sh
+gh release download raw-data --dir archives
+for f in archives/*.tar.gz; do tar -xzf "$f" -C data/raw; done
+.venv/bin/python -m fuel_lakehouse process
+```
 
 Querying the result with Spark SQL:
 
@@ -125,10 +192,11 @@ spark.sql("""
 ```
 
 The tests build small raw files in the same format as the ministry's and check each quality rule,
-the stale flag, reconciliation, re-runs, header changes and partition pruning. They run on every push
-with GitHub Actions.
+the stale flag, reconciliation, re-runs, header changes and partition pruning. On every push, GitHub
+Actions runs them, then runs the pipeline and `dbt build` on the sample day.
 
 ## Next steps
 
 - Store silver as an Apache Iceberg table, for atomic commits, time travel and schema evolution.
-- Orchestrate download and processing with Airflow.
+- Day-over-day price changes per station, once the daily load has collected enough history.
+- Run the same dbt models on a cloud warehouse (Snowflake or BigQuery) by adding a second target.

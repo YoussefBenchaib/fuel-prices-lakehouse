@@ -1,2 +1,4 @@
 pyspark==3.5.3
 pytest==8.3.3
+dbt-core==1.9.11
+dbt-duckdb==1.9.6

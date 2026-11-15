@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: lake
+    description: Parquet tables written by the Spark pipeline (fuel_lakehouse), partitioned by extraction_date.
+    meta:
+      external_location: >-
+        read_parquet('{{ env_var("LAKE_DIR", "../data/lake") }}/{identifier}/*/*.parquet',
+        hive_partitioning = true)
+    tables:
+      - name: silver_prices
+        identifier: silver/prices
+        description: One row per day, station, fuel and self/served mode. Only rows that passed the quality checks.
+      - name: gold_province_prices
+        identifier: gold/province_prices
+        description: Province averages computed in Spark. Used to check that dbt and Spark agree.

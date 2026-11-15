@@ -1,0 +1,8 @@
+# DuckDB reads the Parquet files written by the Spark pipeline, so dbt needs no server or account.
+fuel_prices:
+  target: local
+  outputs:
+    local:
+      type: duckdb
+      path: target/fuel_prices.duckdb
+      threads: 4
