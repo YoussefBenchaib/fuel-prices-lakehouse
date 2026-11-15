@@ -144,48 +144,7 @@ replaced by placeholders), enough to try everything without downloading:
 .venv/bin/python -m fuel_lakehouse process --raw-dir sample/raw
 ```
 
-## Daily load
-
-Since the ministry keeps only the latest day online, each day has to be saved the day it is published.
-`scripts/archive_day.sh` downloads the files and stores them as an archive in the
-[`raw-data` release](https://github.com/YoussefBenchaib/fuel-prices-lakehouse/releases/tag/raw-data)
-(about 2 MB per day); it is meant to run once a day from cron.
-
-I first scheduled this in GitHub Actions, but the ministry's server doesn't answer requests coming from
-GitHub's runners (the download times out), so the script has to run from a machine in Italy.
-
-To rebuild the whole history locally:
-
-```sh
-gh release download raw-data --dir archives
-for f in archives/*.tar.gz; do tar -xzf "$f" -C data/raw; done
-.venv/bin/python -m fuel_lakehouse process
-```
-
-Querying the result with Spark SQL:
-
-```python
-from fuel_lakehouse.spark import get_spark
-
-spark = get_spark()
-spark.read.parquet("data/lake/gold/province_prices").createOrReplaceTempView("province_prices")
-spark.sql("""
-    SELECT fuel, is_self, stations, avg_price, min_price, max_price
-    FROM province_prices
-    WHERE extraction_date = DATE'2026-10-20' AND province = 'MI' AND fuel IN ('Benzina', 'Gasolio')
-""").show()
-```
-
-```
-+-------+-------+--------+---------+---------+---------+
-|   fuel|is_self|stations|avg_price|min_price|max_price|
-+-------+-------+--------+---------+---------+---------+
-|Benzina|  false|     353|    2.155|    1.979|    2.519|
-|Benzina|   true|     646|    2.006|    1.839|    2.399|
-|Gasolio|  false|     345|    2.389|    2.129|    2.719|
-|Gasolio|   true|     637|    2.242|    1.949|    2.592|
-+-------+-------+--------+---------+---------+---------+
-```
+To build a history, run `download` once a day after 8:00: the ministry keeps only the latest day online.
 
 ## Tests
 
@@ -200,5 +159,5 @@ Actions runs them, then runs the pipeline and `dbt build` on the sample day.
 ## Next steps
 
 - Store silver as an Apache Iceberg table, for atomic commits, time travel and schema evolution.
-- Day-over-day price changes per station, once the daily load has collected enough history.
+- Day-over-day price changes per station, once more days are collected.
 - Run the same dbt models on a cloud warehouse (Snowflake or BigQuery) by adding a second target.
