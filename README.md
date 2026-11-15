@@ -146,11 +146,13 @@ replaced by placeholders), enough to try everything without downloading:
 
 ## Daily load
 
-Since the ministry keeps only the latest day online, a scheduled GitHub Actions workflow
-(`.github/workflows/daily.yml`) downloads the files every morning, saves them as an archive in the
+Since the ministry keeps only the latest day online, each day has to be saved the day it is published.
+`scripts/archive_day.sh` downloads the files and stores them as an archive in the
 [`raw-data` release](https://github.com/YoussefBenchaib/fuel-prices-lakehouse/releases/tag/raw-data)
-(about 2 MB per day), then processes the day and runs the dbt tests. If the ministry changes the
-format or the checks fail, the run fails and I get an email.
+(about 2 MB per day); it is meant to run once a day from cron.
+
+I first scheduled this in GitHub Actions, but the ministry's server doesn't answer requests coming from
+GitHub's runners (the download times out), so the script has to run from a machine in Italy.
 
 To rebuild the whole history locally:
 
